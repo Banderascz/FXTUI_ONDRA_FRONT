@@ -19,17 +19,45 @@
 #include <nlohmann/json.hpp> // for JSON
 
 #include <iostream>
+#include <cstring>
+#include <ostream>
+#include <sstream>
+#include <iomanip>
+
+#include <openssl/sha.h>
+std::string sha256(const std::string &str)
+{
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256_CTX sha256;
+    SHA256_Init(&sha256);
+    SHA256_Update(&sha256, str.c_str(), str.size());
+    SHA256_Final(hash, &sha256);
+    std::stringstream ss;
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
+    {
+        ss << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
+    }
+    return ss.str();
+}
 
 using json = nlohmann::json;
 
-std::string error_cod;
-CURL *curl = curl_easy_init();
-CURLcode res;
+std::string readBuffer, Error_from_buffer;
+
+static size_t WriteCallback(void *contents, size_t size, size_t nmemb, void *userp)
+{
+    ((std::string *)userp)->append((char *)contents, size * nmemb);
+    return size * nmemb;
+}
 
 void action(std::string &username, std::string &colour, std::string &password)
 {
+    CURL *curl = curl_easy_init();
+    CURLcode res;
+    password = sha256(password);
     if (curl)
     {
+        char errbuf[CURL_ERROR_SIZE];
         // ŽSON Skládání
         json j;
         j["username"] = username;
@@ -42,116 +70,85 @@ void action(std::string &username, std::string &colour, std::string &password)
                          "https://ondra.rapspace.com/dev-versions/sqlchad/signin/signinback.php");
         // Předání ŽSONU
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_string.c_str());
-
+        // Setup pro error kody
+        curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errbuf);
+        /*Přesměrování write callbacku*/
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
+        /* set the error buffer as empty before performing a request */
+        errbuf[0] = 0;
+        // headery
         struct curl_slist *headers = NULL;
         headers = curl_slist_append(headers, "Content-Type: application/json");
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        // spusteni CURL
         res = curl_easy_perform(curl);
+
+        if (res != CURLE_OK)
+        {
+            size_t len = strlen(errbuf);
+            fprintf(stderr, "\nlibcurl: (%d) ", res);
+            if (len)
+                fprintf(stderr, "%s%s", errbuf,
+                        ((errbuf[len - 1] != '\n') ? "\n" : ""));
+            else
+                fprintf(stderr, "%s\n", curl_easy_strerror(res));
+        }
+
+        json rB;
+
+        std::stringstream(readBuffer) >> rB;
+
+        int errorcod;
+        // vypis JSONU
+        for (auto &[key, val] : rB.items())
+        {
+            if (key == "status")
+            {
+                errorcod = val;
+                // std::cout << val << std::endl;
+            }
+        }
+        // std::cout << errorcod << std::endl;
+        //  Error kódy (pan Ruperspác neustále v tom dělá bordel :(
+        switch (errorcod)
+        {
+        case 0:
+            Error_from_buffer = "Žádné chyby";
+            break;
+        case 1:
+            Error_from_buffer = "Přihlašovací jméno je příliš krátké, minimum jsou 4 slova.";
+            break;
+        case 2:
+            Error_from_buffer = "Přihlašovací jméno je příliš dlouhé, maximum je 85 slov.";
+            break;
+        case 3:
+            Error_from_buffer = "Přihlašovací jméno už je zabrané.";
+            break;
+        case 4:
+            Error_from_buffer = "Neplatný formát pro barvu.";
+            break;
+        case 5:
+            Error_from_buffer = "Heslo je prázdné.";
+            break;
+        case 6:
+            Error_from_buffer = "Heslo je příliš dlouhé, maximum je 85 slov.";
+            break;
+        default:
+            Error_from_buffer = "Neznámá chyba.";
+        }
+
         // Pročištění curl
         curl_easy_cleanup(curl);
         curl_slist_free_all(headers);
-        // Error kódy (pan Ruperspác neustále v tom dělá bordel :( )
-        switch (res)
-        {
-        case 0:
-            error_cod = "no errors";
-            break;
-        case 1:
-            error_cod = "username too short at least 4 characters";
-            break;
-        case 2:
-            error_cod = "username too long maximum is 85 characters";
-            break;
-        case 3:
-            error_cod = "username alredy taken";
-            break;
-        case 4:
-            error_cod = "invalid colour format";
-            break;
-        case 5:
-            error_cod = "password is empty";
-            break;
-        default:
-            error_cod = "unknown error";
-        }
-        /*std::cout << std::endl
-                  << error_cod;*/
+        rB.clear();
+        j.clear();
     }
 }
 
 int main()
 {
     using namespace ftxui;
-
-    // InputOption style_1 = InputOption::Default();
-
-    /*InputOption style_2 = InputOption::Spacious();
-
-    InputOption style_3 = InputOption::Spacious();
-    style_3.transform = [](InputState state)
-    {
-        state.element |= borderEmpty;
-
-        if (state.is_placeholder)
-        {
-            state.element |= dim;
-        }
-
-        if (state.focused)
-        {
-            state.element |= borderDouble;
-            state.element |= bgcolor(Color::White);
-            state.element |= color(Color::Black);
-        }
-        else if (state.hovered)
-        {
-            state.element |= borderRounded;
-            state.element |= bgcolor(LinearGradient(90, Color::Blue, Color::Red));
-            state.element |= color(Color::White);
-        }
-        else
-        {
-            state.element |= border;
-            state.element |= bgcolor(LinearGradient(0, Color::Blue, Color::Red));
-            state.element |= color(Color::White);
-        }
-
-        return state.element;
-    };
-
-    InputOption style_4 = InputOption::Spacious();
-    style_4.transform = [](InputState state)
-    {
-        state.element = hbox({
-            text("Theorem") | center | borderEmpty | bgcolor(Color::Red),
-            separatorEmpty(),
-            separator() | color(Color::White),
-            separatorEmpty(),
-            std::move(state.element),
-        });
-
-        state.element |= borderEmpty;
-        if (state.is_placeholder)
-        {
-            state.element |= dim;
-        }
-
-        if (state.focused)
-        {
-            state.element |= bgcolor(Color::Black);
-        }
-        else
-        {
-            state.element |= bgcolor(Color::Blue);
-        }
-
-        if (state.hovered)
-        {
-            state.element |= bgcolor(Color::GrayDark);
-        }
-
-        return vbox({state.element, separatorEmpty()});
-    };*/
 
     InputOption style_5 = InputOption::Spacious();
     style_5.transform = [](InputState state)
@@ -203,7 +200,7 @@ int main()
 
     auto action_renderer =
         Renderer([&]
-                 { return text("Errors: " + error_cod); });
+                 { return text("Errors: " + Error_from_buffer + "\n"); });
     auto generateUiFromStyle = [&](InputOption style)
     {
         return Container::Vertical({
