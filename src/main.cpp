@@ -55,6 +55,7 @@ void action(std::string &username, std::string &colour, std::string &password)
     CURL *curl = curl_easy_init();
     CURLcode res;
     password = sha256(password);
+    Error_from_buffer.clear();
     if (curl)
     {
         char errbuf[CURL_ERROR_SIZE];
@@ -143,6 +144,9 @@ void action(std::string &username, std::string &colour, std::string &password)
         curl_slist_free_all(headers);
         rB.clear();
         j.clear();
+        username.clear();
+        password.clear();
+        colour.clear();
     }
 }
 
@@ -201,13 +205,13 @@ int main()
     auto action_renderer =
         Renderer([&]
                  { return text("Errors: " + Error_from_buffer + "\n"); });
+
     auto generateUiFromStyle = [&](InputOption style)
     {
         return Container::Vertical({
-                   Input(username, "Username", style),
-                   Input(password, "Heslo", style),
-                   Input(color, "Barva", style),
-
+                   Input(&username, "Přihlašovací jméno", style),
+                   Input(&password, "Heslo", style),
+                   Input(&color, "Barva", style),
                }) |
                borderEmpty;
     };
