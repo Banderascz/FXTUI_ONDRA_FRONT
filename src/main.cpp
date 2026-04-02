@@ -23,6 +23,7 @@
 #include <ostream>
 #include <sstream>
 #include <iomanip>
+#include <vector> // for vector
 
 #include <openssl/sha.h>
 std::string sha256(const std::string &str)
@@ -50,7 +51,7 @@ static size_t WriteCallback(void *contents, size_t size, size_t nmemb, void *use
     return size * nmemb;
 }
 
-void action(std::string &username, std::string &colour, std::string &password)
+void action_register(std::string &username, std::string &colour, std::string &password)
 {
     CURL *curl = curl_easy_init();
     CURLcode res;
@@ -115,7 +116,7 @@ void action(std::string &username, std::string &colour, std::string &password)
         switch (errorcod)
         {
         case 0:
-            Error_from_buffer = "Žádné chyby";
+            Error_from_buffer = "Žádné chyby.";
             break;
         case 1:
             Error_from_buffer = "Přihlašovací jméno je příliš krátké, minimum jsou 4 slova.";
@@ -150,12 +151,103 @@ void action(std::string &username, std::string &colour, std::string &password)
     }
 }
 
+void action_login(std::string &username, std::string &colour, std::string &password)
+{
+    CURL *curl = curl_easy_init();
+    CURLcode res;
+    password = sha256(password);
+    Error_from_buffer.clear();
+    if (curl)
+    {
+        char errbuf[CURL_ERROR_SIZE];
+        // ŽSON Skládání
+        json j;
+        j["username"] = username;
+        j["colour"] = colour;
+        j["password"] = password;
+
+        std::string json_string = j.dump();
+        // Nastavení URL
+        curl_easy_setopt(curl, CURLOPT_URL,
+                         "https://ondra.rapspace.com/dev-versions/sqlchad/signin/signinback.php");
+        // Předání ŽSONU
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_string.c_str());
+        // Setup pro error kody
+        curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errbuf);
+        /*Přesměrování write callbacku*/
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
+        /* set the error buffer as empty before performing a request */
+        errbuf[0] = 0;
+        // headery
+        struct curl_slist *headers = NULL;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        // spusteni CURL
+        res = curl_easy_perform(curl);
+
+        if (res != CURLE_OK)
+        {
+            size_t len = strlen(errbuf);
+            fprintf(stderr, "\nlibcurl: (%d) ", res);
+            if (len)
+                fprintf(stderr, "%s%s", errbuf,
+                        ((errbuf[len - 1] != '\n') ? "\n" : ""));
+            else
+                fprintf(stderr, "%s\n", curl_easy_strerror(res));
+        }
+
+        json rB;
+
+        std::stringstream(readBuffer) >> rB;
+
+        int errorcod;
+        // vypis JSONU
+        for (auto &[key, val] : rB.items())
+        {
+            if (key == "status")
+            {
+                errorcod = val;
+                // std::cout << val << std::endl;
+            }
+        }
+        // std::cout << errorcod << std::endl;
+        //  Error kódy (pan Ruperspác neustále v tom dělá bordel :(
+        switch (errorcod)
+        {
+        case 0:
+            Error_from_buffer = "Žádné chyby.";
+            break;
+        case 1:
+            Error_from_buffer = "Přihlašovací jméno je prázdné.";
+            break;
+        case 2:
+            Error_from_buffer = "Heslo je prázdné.";
+            break;
+        case 3:
+            Error_from_buffer = "Zadali jste špatně Přihlašovací jméno nebo Heslo.";
+            break;
+        default:
+            Error_from_buffer = "Neznámá chyba.";
+        }
+        // Pročištění curl
+        curl_easy_cleanup(curl);
+        curl_slist_free_all(headers);
+        rB.clear();
+        j.clear();
+        username.clear();
+        password.clear();
+        colour.clear();
+    }
+}
+
 int main()
 {
     using namespace ftxui;
+    auto screen = App::Fullscreen();
 
-    InputOption style_5 = InputOption::Spacious();
-    style_5.transform = [](InputState state)
+    InputOption Register = InputOption::Spacious();
+    Register.transform = [](InputState state)
     {
         state.element = hbox({
             text("Zadejte: ") | center | borderRounded,
@@ -195,16 +287,56 @@ int main()
             separatorEmpty(),
         });
     };
+    InputOption Login = InputOption::Spacious();
+    Login.transform = [](InputState state)
+    {
+        state.element = hbox({
+            text("Zadejte: ") | center | borderRounded,
+            separatorEmpty(),
+            separator() | color(Color::Grey15),
+            separatorEmpty(),
+            std::move(state.element),
+        });
+
+        state.element |= borderEmpty;
+        if (state.is_placeholder)
+        {
+            state.element |= bold;
+            state.element |= color(Color::Purple);
+            state.element |= bgcolor(Color::Black);
+        }
+
+        if (state.focused)
+        {
+            state.element |= color(Color::Black);
+            state.element |= bgcolor(Color::Purple);
+        }
+        else
+        {
+            state.element |= color(Color::Purple);
+            state.element |= bgcolor(Color::Black);
+        }
+
+        if (state.hovered)
+        {
+            state.element |= color(Color::Purple);
+            state.element |= bgcolor(Color::Black);
+        }
+
+        return vbox({
+            state.element,
+            separatorEmpty(),
+        });
+    };
 
     std::string username;
     std::string password;
     std::string color;
-    auto action_acivate = [&]
-    { action(username, color, password); };
+    auto action_activate = [&]
+    { action_register(username, color, password); };
 
-    auto action_renderer =
-        Renderer([&]
-                 { return text("Errors: " + Error_from_buffer + "\n"); });
+    auto action_activate2 = [&]
+    { action_login(username, color, password); };
 
     auto generateUiFromStyle = [&](InputOption style)
     {
@@ -212,24 +344,67 @@ int main()
                    Input(&username, "Přihlašovací jméno", style),
                    Input(&password, "Heslo", style),
                    Input(&color, "Barva", style),
+
                }) |
                borderEmpty;
     };
 
-    auto ui = Container::Horizontal({
-        // generateUiFromStyle(style_1),
-        generateUiFromStyle(style_5),
-        Renderer([]
-                 { return separator(); }),
-        action_renderer,
-        Renderer([]
-                 { return separator(); }),
+    auto register_component = Container::Horizontal({
+                                  generateUiFromStyle(Register),
+                                  Renderer([&]
+                                           { return separator(); }),
+                                  Renderer([&]
+                                           { return text("Errors: " + Error_from_buffer + "\n"); }),
+                                  Renderer([&]
+                                           { return separator(); }),
 
-        Container::Vertical({
-            Button("POTVRDIT", action_acivate, ButtonOption::Ascii()),
+                                  Container::Vertical({
+                                      Button("POTVRDIT", action_activate, ButtonOption::Ascii()),
+                                  }),
+                              }) |
+                              border;
+
+    auto login_component = Container::Horizontal({
+                               generateUiFromStyle(Login),
+                               Renderer([&]
+                                        { return separator(); }),
+                               Renderer([&]
+                                        { return text("Errors: " + Error_from_buffer + "\n"); }),
+                               Renderer([&]
+                                        { return separator(); }),
+
+                               Container::Vertical({
+                                   Button("POTVRDIT", action_activate2, ButtonOption::Ascii()),
+                               }),
+                           }) |
+                           border;
+    int tab_index = 0;
+    std::vector<std::string> tab_entries = {
+        "Register",
+        "Login",
+    };
+    auto tab_selection =
+        Menu(&tab_entries, &tab_index, MenuOption::HorizontalAnimated());
+    auto tab_content = Container::Tab(
+        {
+            register_component,
+            login_component,
+        },
+        &tab_index);
+
+    auto ui = Container::Vertical({
+        // generateUiFromStyle(style_1),
+        Renderer([]
+                 { return text("FXTUI CHAT") | bold | border | hcenter; }),
+        Container::Horizontal({
+            tab_selection | flex,
+            Button("Exit", [&]
+                   { screen.Exit(); }, ButtonOption::Ascii()) |
+                border,
+        }),
+        Container::Horizontal({
+            tab_content | flex,
         }),
     });
-
-    auto screen = App::TerminalOutput();
     screen.Loop(ui);
 }
